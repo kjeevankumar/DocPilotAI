@@ -1,5 +1,1 @@
-{
-  "buildCommand": "next build frontend",
-  "outputDirectory": ".next",
-  "framework": "nextjs"
-}
+{}
