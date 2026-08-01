@@ -1,0 +1,34 @@
+# dependencies
+node_modules
+frontend/node_modules
+
+# next.js build output
+.next
+frontend/.next
+out
+frontend/out
+
+# environment variables
+.env
+.env.local
+.env.development.local
+.env.production.local
+frontend/.env
+backend/.env
+
+# python cache and environments
+__pycache__/
+backend/__pycache__/
+*.pyc
+venv/
+.venv/
+
+# backend uploads folder (keep directory structure, ignore user files)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# system files
+.DS_Store
+*.pem
+.vscode
+.idea
