@@ -33,7 +33,7 @@ export default function Home() {
     }
   };
 
-  const handleUploadSuccess = (id: string, name: string) => {
+  const handleUploadSuccess = (id: string, name: string, pagesCount: number) => {
     setDocId(id);
     setFilename(name);
     setAppState('processing');

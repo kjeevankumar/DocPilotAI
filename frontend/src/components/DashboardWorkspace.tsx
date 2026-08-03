@@ -247,17 +247,22 @@ export default function DashboardWorkspace({ data, onReset, apiKey }: DashboardW
           </span>
           <div>
             <div className="flex items-baseline gap-1 text-slate-200">
-              <span className="text-3xl font-extrabold font-mono tracking-tight text-indigo-300">~2.5</span>
+              <span className="text-3xl font-extrabold font-mono tracking-tight text-indigo-300">
+                ~{(
+                  Math.max(0.5, (data.pages_count * 0.4) + (data.clauses.length * 0.15) + (data.risk_flags.length * 0.1))
+                ).toFixed(1)}
+              </span>
               <span className="text-xs font-semibold text-slate-400">Hours Saved</span>
             </div>
             <p className="text-[11px] text-slate-400 mt-2 font-sans leading-relaxed">
-              Based on standard manual analyst reviews of comparable {data.document_type} agreements.
+              Based on {data.pages_count} page(s), {data.clauses.length} clause(s), and {data.risk_flags.length} risk flag(s) vs. standard manual analyst review.
             </p>
           </div>
           <div className="flex items-center gap-1 text-[10px] text-emerald-400 font-semibold mt-2">
             <Clock className="w-3.5 h-3.5" /> High-speed review
           </div>
         </div>
+
       </div>
 
       {/* Main Workspace split panel */}

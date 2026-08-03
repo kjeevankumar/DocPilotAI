@@ -1,6 +1,21 @@
+"""
+fallback_service.py
+-------------------
+Generates a DOCUMENT-AWARE heuristic fallback response when Gemini API is
+unavailable. Crucially, the hardcoded "sample document" data path has been
+REMOVED — every fallback now reads from the actual document text so that
+different documents produce meaningfully different outputs even without Gemini.
+
+The old implementation had:
+  1. A global IS_SAMPLE_RUN flag that never reset between requests
+  2. Hardcoded Northfield/Brightwave data returned for ANY document once the
+     flag was set, making every upload look identical
+
+This version uses real regex + heuristic extraction on whatever text is passed.
+"""
 import re
 import datetime
-from typing import Any
+from typing import Any, List
 from backend.models.schemas import (
     DocumentClassificationResult,
     EntityExtractionResult,
@@ -21,389 +36,605 @@ from backend.models.schemas import (
     Coordinate
 )
 
+
+# ---------------------------------------------------------------------------
+# Heuristic helpers — these extract real information from document text
+# ---------------------------------------------------------------------------
+
+def _extract_doc_type(text: str) -> str:
+    """Classify document type from keywords."""
+    t = text.lower()
+    if "master service agreement" in t or "msa" in t:
+        return "Master Service Agreement"
+    if "non-disclosure" in t or " nda " in t or "confidentiality agreement" in t:
+        return "NDA"
+    if "employment agreement" in t or "offer letter" in t or "employment contract" in t:
+        return "Employment Agreement"
+    if "lease agreement" in t or "rental agreement" in t or "tenancy" in t:
+        return "Lease Agreement"
+    if "purchase order" in t or "p.o. number" in t or "po number" in t:
+        return "Purchase Order"
+    if "invoice" in t and ("amount due" in t or "bill to" in t or "invoice number" in t):
+        return "Invoice"
+    if "receipt" in t and ("payment received" in t or "total paid" in t):
+        return "Receipt"
+    if "statement of work" in t or "sow" in t:
+        return "Statement of Work"
+    if "service agreement" in t or "services agreement" in t:
+        return "Service Agreement"
+    if "terms and conditions" in t or "terms of service" in t:
+        return "Terms of Service"
+    if "partnership agreement" in t:
+        return "Partnership Agreement"
+    if "amendment" in t and ("agreement" in t or "contract" in t):
+        return "Contract Amendment"
+    # Generic contract fallback
+    if "agreement" in t or "contract" in t or "parties" in t:
+        return "Contract"
+    return "Business Document"
+
+
+def _extract_companies(text: str) -> List[str]:
+    """Extract company names using regex."""
+    patterns = [
+        r"([A-Z][A-Za-z0-9\s\,\.\-\&\']{2,60}\s(?:LLC|Pvt\.\s*Ltd\.|Ltd\.|Inc\.|Corp\.|Co\.|LLP|PLC|GmbH|S\.A\.))",
+        r"(?:between|by and between|party[:\s]+)([A-Z][A-Za-z0-9\s\,\.\-\&\']{2,60}(?:LLC|Ltd|Inc|Corp|Co|LLP))",
+    ]
+    companies = []
+    for pat in patterns:
+        matches = re.findall(pat, text)
+        for m in matches:
+            name = m.strip().rstrip(",;.")
+            if name and len(name) > 3 and name not in companies:
+                companies.append(name)
+    return companies[:5]
+
+
+def _extract_date(text: str, pattern_hints: List[str]) -> str | None:
+    """Try to extract a date matching pattern hints from text."""
+    date_patterns = [
+        r"\b(\d{4}-\d{2}-\d{2})\b",
+        r"\b(\w+ \d{1,2},?\s+\d{4})\b",
+        r"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b",
+    ]
+    for hint in pattern_hints:
+        context_match = re.search(rf"(?:{hint})[\s:]*(.{{0,60}})", text, re.IGNORECASE)
+        if context_match:
+            context = context_match.group(1)
+            for dp in date_patterns:
+                dm = re.search(dp, context)
+                if dm:
+                    return dm.group(1)
+    return None
+
+
+def _extract_amount(text: str) -> str | None:
+    """Extract a financial amount from text."""
+    match = re.search(
+        r"(\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?(?:\s*(?:USD|million|billion))?|\b\d{1,3}(?:,\d{3})*\s*(?:USD|INR|EUR|GBP)\b)",
+        text
+    )
+    return match.group(1).strip() if match else None
+
+
+def _extract_jurisdiction(text: str) -> str | None:
+    """Extract governing jurisdiction from text."""
+    match = re.search(
+        r"governed by(?:\s+and\s+construed\s+in\s+accordance\s+with)?(?:\s+the)?\s+laws\s+of(?:\s+the\s+(?:State|Province|Country)\s+of)?\s+([A-Za-z\s]+?)[\.,\n]",
+        text, re.IGNORECASE
+    )
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"jurisdiction[:\s]+([A-Za-z\s]+?)[\.,\n]", text, re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def _extract_signatures(text: str) -> List[str]:
+    """Extract signature block names from text."""
+    sigs = []
+    for match in re.finditer(r"(?:Authorized\s+(?:Signatory|Representative|By)|Signed\s+by)[:\s]+([A-Z][A-Za-z\s]{3,50})", text, re.IGNORECASE):
+        name = match.group(1).strip()
+        if name and name not in sigs:
+            sigs.append(name)
+    return sigs[:4]
+
+
+def _extract_clauses_heuristic(text: str) -> List[ClauseItem]:
+    """Extract clause sections by looking for numbered/titled sections."""
+    clauses = []
+    # Look for "Section N. Title" or "ARTICLE N. Title" patterns
+    section_pattern = re.compile(
+        r"(?:SECTION|ARTICLE|CLAUSE|SCHEDULE|EXHIBIT|SCHEDULE|§)\s*(\d+(?:\.\d+)?)[\.:\s]+([A-Z][^\n]{3,80})\n(.*?)(?=(?:SECTION|ARTICLE|CLAUSE|SCHEDULE|EXHIBIT|§)\s*\d|$)",
+        re.IGNORECASE | re.DOTALL
+    )
+    for m in section_pattern.finditer(text):
+        title = m.group(2).strip()
+        body = m.group(3).strip()[:500]
+        if len(body) > 30:
+            clauses.append(ClauseItem(
+                name=title[:60],
+                verbatim_text=body,
+                confidence=0.75,
+                reasoning=f"Extracted from document section {m.group(1)}."
+            ))
+        if len(clauses) >= 10:
+            break
+
+    # Also detect key clause types by keyword
+    keyword_clauses = {
+        "Termination": ["terminat", "notice of terminat"],
+        "Confidentiality": ["confidential", "non-disclosure"],
+        "Payment Terms": ["payment", "invoice", "fee", "amount due"],
+        "Limitation of Liability": ["limitation of liability", "liability cap", "in no event"],
+        "Indemnification": ["indemnif", "hold harmless"],
+        "Governing Law": ["governing law", "governed by", "jurisdiction"],
+        "Force Majeure": ["force majeure", "act of god", "beyond reasonable control"],
+        "Dispute Resolution": ["dispute", "arbitrat", "mediati"],
+        "Auto-Renewal": ["auto.?renew", "automatic renewal", "automatically renew"],
+        "Intellectual Property": ["intellectual property", "ip ownership", "work product"],
+    }
+
+    existing_names = {c.name.lower() for c in clauses}
+    text_lower = text.lower()
+
+    for clause_name, keywords in keyword_clauses.items():
+        if clause_name.lower() in existing_names:
+            continue
+        for kw in keywords:
+            idx = text_lower.find(kw)
+            if idx != -1:
+                snippet_start = max(0, idx - 20)
+                snippet_end = min(len(text), idx + 600)
+                snippet = text[snippet_start:snippet_end].strip()
+                clauses.append(ClauseItem(
+                    name=clause_name,
+                    verbatim_text=snippet[:500],
+                    confidence=0.70,
+                    reasoning=f"Identified by keyword '{kw}' match in document."
+                ))
+                existing_names.add(clause_name.lower())
+                break
+
+    return clauses[:12]
+
+
+def _extract_risks_heuristic(text: str, clauses: List[ClauseItem]) -> List[RiskFlagItem]:
+    """Generate risk flags from clause content and document text."""
+    risks = []
+    text_lower = text.lower()
+
+    risk_patterns = [
+        {
+            "keywords": ["in no event shall", "unlimited liability", "no cap", "fully liable for all"],
+            "clause_name": "Limitation of Liability",
+            "category": "Unlimited Liability",
+            "severity": "Critical",
+            "reasoning": "The liability clause does not cap damages, exposing the party to unlimited financial risk.",
+            "suggested_action": "Negotiate a mutual liability cap (e.g., limited to fees paid in the preceding 12 months)."
+        },
+        {
+            "keywords": ["100%", "all remaining fees", "entire remaining", "full remaining balance"],
+            "clause_name": "Early Termination Penalty",
+            "category": "Excessive Penalty",
+            "severity": "High",
+            "reasoning": "An early termination penalty of 100% of remaining fees is extremely punitive.",
+            "suggested_action": "Negotiate to reduce early termination penalty to 2-3 months of service fees."
+        },
+        {
+            "keywords": ["automatically renew", "auto-renew", "automatic renewal"],
+            "clause_name": "Auto-Renewal",
+            "category": "Lock-in Risk",
+            "severity": "Medium",
+            "reasoning": "Automatic renewal clauses create unintended lock-in if notice deadlines are missed.",
+            "suggested_action": "Reduce the non-renewal notice period or add calendar reminders."
+        },
+        {
+            "keywords": ["for any reason or no reason", "at any time", "sole discretion"],
+            "clause_name": "Termination",
+            "category": "One-sided Termination",
+            "severity": "High",
+            "reasoning": "One party has unrestricted termination rights while the other does not, creating an imbalanced agreement.",
+            "suggested_action": "Add mutual termination for convenience with equal notice periods for both parties."
+        },
+        {
+            "keywords": ["perpetual license", "irrevocable license", "worldwide license"],
+            "clause_name": "Intellectual Property",
+            "category": "IP Ownership Risk",
+            "severity": "High",
+            "reasoning": "Broad IP licensing terms may transfer critical intellectual property rights unintentionally.",
+            "suggested_action": "Clarify IP ownership terms and limit license scope to agreed-upon use cases."
+        },
+        {
+            "keywords": ["without limitation", "consequential damages", "indirect damages", "lost profits"],
+            "clause_name": "Consequential Damages",
+            "category": "Consequential Damages Exposure",
+            "severity": "High",
+            "reasoning": "Exposure to consequential or indirect damages (including lost profits) can lead to substantial financial liability.",
+            "suggested_action": "Add mutual exclusion of consequential, indirect, and punitive damages."
+        },
+        {
+            "keywords": ["unilateral", "sole right to modify", "amend at any time", "may change terms"],
+            "clause_name": "Unilateral Modification",
+            "category": "Unfair Contract Term",
+            "severity": "Medium",
+            "reasoning": "One-sided right to modify terms without consent undermines contractual certainty.",
+            "suggested_action": "Require written mutual consent for any material changes to the agreement."
+        },
+        {
+            "keywords": ["1.5%", "2% per month", "interest on late", "overdue interest"],
+            "clause_name": "Late Payment Interest",
+            "category": "High Interest Rate",
+            "severity": "Low",
+            "reasoning": "Monthly interest rates on late payments (e.g., 1.5%/month = 18%/year) increase financial risk for delayed payments.",
+            "suggested_action": "Negotiate to a lower rate (e.g., 0.5%/month) or a fixed late fee."
+        },
+    ]
+
+    for pattern in risk_patterns:
+        for kw in pattern["keywords"]:
+            if kw.lower() in text_lower:
+                # Find verbatim text
+                idx = text_lower.find(kw.lower())
+                start = max(0, idx - 50)
+                end = min(len(text), idx + 350)
+                verbatim = text[start:end].strip()
+
+                risks.append(RiskFlagItem(
+                    clause_name=pattern["clause_name"],
+                    category=pattern["category"],
+                    severity=pattern["severity"],
+                    text=verbatim,
+                    reasoning=pattern["reasoning"],
+                    suggested_action=pattern["suggested_action"],
+                    confidence=0.78
+                ))
+                break  # Only one risk per pattern
+
+    return risks
+
+
+# ---------------------------------------------------------------------------
+# Main dispatch function
+# ---------------------------------------------------------------------------
+
 def generate_smart_fallback(response_schema: Any, document_text: str, filename: str = "", force_sample: bool = False) -> Any:
     """
-    Generates a highly realistic, context-aware mock response for the given schema
-    based on the document text. This ensures the UI remains fully functional and
-    looks professional even if the Gemini API is rate-limited or unavailable.
+    Generates a document-AWARE heuristic response for the given schema
+    based on actual document text analysis.
+
+    IMPORTANT: The force_sample / IS_SAMPLE_RUN mechanism has been REMOVED.
+    Every call now extracts real information from the provided document text,
+    so different documents produce different outputs even without Gemini.
     """
     text = document_text or ""
-    is_sample = force_sample or any(k in text for k in ["Northfield", "Brightwave", "MASTER SERVICE AGREEMENT", "18,500", "Exhibit A", "cloud infrastructure", "Kavuri Hills", "Harbor Way"])
-
     schema_name = getattr(response_schema, "__name__", str(response_schema))
 
+    print(f"[FALLBACK] Generating heuristic fallback for schema: {schema_name} | Text length: {len(text)}")
+
+    # ------------------------------------------------------------------
     if "DocumentClassificationResult" in schema_name:
-        if is_sample:
-            return DocumentClassificationResult(
-                document_type="Contract",
-                confidence=0.98,
-                reasoning="The document is explicitly titled 'MASTER SERVICE AGREEMENT' and contains formal terms governing services, payments, automatic renewal, liability, and governing law typical of a master service contract."
-            )
-        # Heuristics for generic documents
-        doc_type = "Contract"
-        if "invoice" in text.lower():
-            doc_type = "Invoice"
-        elif "non-disclosure" in text.lower() or "nda" in text.lower() or "confidentiality agreement" in text.lower():
-            doc_type = "NDA"
-        elif "purchase order" in text.lower() or "po number" in text.lower():
-            doc_type = "Purchase Order"
-        elif "receipt" in text.lower():
-            doc_type = "Receipt"
-        elif "lease" in text.lower():
-            doc_type = "Lease Agreement"
-        elif "employment" in text.lower():
-            doc_type = "Employment Agreement"
-        
+        doc_type = _extract_doc_type(text)
         return DocumentClassificationResult(
             document_type=doc_type,
-            confidence=0.90,
-            reasoning=f"Classified as '{doc_type}' based on keywords and structural patterns found in the document text."
+            confidence=0.82,
+            reasoning=f"Heuristic classification as '{doc_type}' based on document structure and keyword analysis. Gemini API was unavailable for deep classification."
         )
 
+    # ------------------------------------------------------------------
     elif "EntityExtractionResult" in schema_name:
-        if is_sample:
-            return EntityExtractionResult(
-                company_names=["Northfield Logistics Pvt. Ltd.", "Brightwave Cloud Services LLC"],
-                person_names=[],
-                addresses=[
-                    "14 Kavuri Hills, Hyderabad, Telangana 500033",
-                    "500 Harbor Way, San Jose, California 95131"
-                ],
-                effective_date="2026-03-01",
-                termination_date="2027-03-01",
-                renewal_date="2026-12-01",
-                contract_duration="12 months",
-                payment_amount="$18,500 USD per month",
-                currency="USD",
-                tax_details="GST registration Hyderabad (implicit)",
-                email="",
-                phone="",
-                jurisdiction="California, USA",
-                signatures_found=["Authorized Signatory Northfield Logistics", "Authorized Signatory Brightwave Cloud Services"],
-                invoice_number=None,
-                purchase_order_number=None,
-                due_date="Within 15 days of invoice date",
-                reasoning="Extracted key corporate entities, dates, addresses, and payment schedules from the Master Service Agreement text."
-            )
-        
-        # Generic Entity Extraction heuristics
-        companies = re.findall(r"([A-Z][a-zA-Z0-9\s,\.\-&]{2,50}\s(?:LLC|Pvt\.\sLtd\.|Ltd\.|Inc\.|Corp\.|Co\.))", text)
-        effective = re.search(r"(?:effective as of|entered into as of|dated|date is)\s*([A-Za-z]+\s+\d+,\s+\d{4}|\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
-        amount = re.search(r"(\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\b\d{1,3}(?:,\d{3})*\s*(?:USD|INR|EUR)\b)", text)
-        jurisdiction = re.search(r"governed by.*laws of(?:\s+the\s+state\s+of)?\s+([A-Za-z\s]+)", text, re.IGNORECASE)
-        
+        companies = _extract_companies(text)
+        effective = _extract_date(text, ["effective as of", "effective date", "entered into as of", "dated", "commencing"])
+        termination = _extract_date(text, ["terminat", "expir", "end date", "expires on"])
+        renewal = _extract_date(text, ["renew", "renewal date", "auto.?renew"])
+        amount = _extract_amount(text)
+        jurisdiction = _extract_jurisdiction(text)
+        signatures = _extract_signatures(text)
+
+        # Duration
+        duration_match = re.search(r"(?:initial\s+term|term\s+of)(?:\s+(?:this\s+agreement))?\s+(?:shall\s+be\s+|is\s+)?(\d+\s+(?:months?|years?))", text, re.IGNORECASE)
+        duration = duration_match.group(1) if duration_match else None
+
+        # Currency
+        currency = None
+        if "$" in text or "USD" in text:
+            currency = "USD"
+        elif "EUR" in text or "€" in text:
+            currency = "EUR"
+        elif "INR" in text or "₹" in text:
+            currency = "INR"
+        elif "GBP" in text or "£" in text:
+            currency = "GBP"
+
+        # Email / phone
+        email_match = re.search(r"[\w\.\-]+@[\w\.\-]+\.\w+", text)
+        phone_match = re.search(r"(?:\+\d{1,3}[\s\-]?)?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{4}", text)
+
+        # Invoice / PO numbers
+        inv_match = re.search(r"invoice\s*(?:no|number|#)[\.:\s]*([A-Z0-9\-]+)", text, re.IGNORECASE)
+        po_match = re.search(r"(?:purchase\s+order|p\.?o\.?)\s*(?:no|number|#)[\.:\s]*([A-Z0-9\-]+)", text, re.IGNORECASE)
+
         return EntityExtractionResult(
-            company_names=list(set(companies))[:3] or ["Unknown Company"],
+            company_names=companies or ["Unknown Party A", "Unknown Party B"],
             person_names=[],
             addresses=[],
-            effective_date=effective.group(1) if effective else None,
-            termination_date=None,
-            renewal_date=None,
-            contract_duration=None,
-            payment_amount=amount.group(1) if amount else None,
-            currency="USD" if "$" in text or "USD" in text else None,
+            effective_date=effective,
+            termination_date=termination,
+            renewal_date=renewal,
+            contract_duration=duration,
+            payment_amount=amount,
+            currency=currency,
             tax_details=None,
-            email=None,
-            phone=None,
-            jurisdiction=jurisdiction.group(1).strip() if jurisdiction else "Unknown",
-            signatures_found=[],
-            reasoning="Extracted available entities using structural and keyword regex scanning."
+            email=email_match.group(0) if email_match else None,
+            phone=phone_match.group(0) if phone_match else None,
+            jurisdiction=jurisdiction or "Not Specified",
+            signatures_found=signatures,
+            invoice_number=inv_match.group(1) if inv_match else None,
+            purchase_order_number=po_match.group(1) if po_match else None,
+            due_date=None,
+            reasoning=f"Heuristic extraction from document text. Found {len(companies)} companies, dates, and jurisdiction. Gemini API was unavailable."
         )
 
+    # ------------------------------------------------------------------
     elif "ClauseIntelligenceResult" in schema_name:
-        if is_sample:
-            return ClauseIntelligenceResult(
-                clauses=[
-                    ClauseItem(
-                        name="Services",
-                        verbatim_text="Vendor shall provide cloud infrastructure hosting, data storage, and technical support services as described in Exhibit A, to be delivered on a monthly subscription basis.",
-                        confidence=0.95,
-                        reasoning="Defines the scope of services under Section 1."
-                    ),
-                    ClauseItem(
-                        name="Payment Terms",
-                        verbatim_text="Client shall pay Vendor a monthly fee of $18,500 USD, payable within 15 days of invoice date. Late payments shall accrue interest at 1.5% per month.",
-                        confidence=0.98,
-                        reasoning="Defines pricing and payment window under Section 2."
-                    ),
-                    ClauseItem(
-                        name="Auto Renewal",
-                        verbatim_text="Thereafter, this Agreement shall automatically renew for successive twelve (12) month periods unless either party provides written notice of non-renewal at least ninety (90) days prior to the end of the then-current term.",
-                        confidence=0.96,
-                        reasoning="Defines automatic renewal and notice period under Section 3."
-                    ),
-                    ClauseItem(
-                        name="Termination",
-                        verbatim_text="Vendor may terminate this Agreement at any time, for any reason or no reason, upon fifteen (15) days written notice to Client. Client may terminate this Agreement for material breach only, provided such breach remains uncured for sixty (60) days following written notice.",
-                        confidence=0.97,
-                        reasoning="Defines termination clauses under Section 4."
-                    ),
-                    ClauseItem(
-                        name="Limitation of Liability",
-                        verbatim_text="IN NO EVENT SHALL VENDOR'S LIABILITY UNDER THIS AGREEMENT BE LIMITED, AND VENDOR SHALL BE FULLY LIABLE FOR ALL DIRECT, INDIRECT, INCIDENTAL, SPECIAL, AND CONSEQUENTIAL DAMAGES ARISING FROM OR RELATED TO THIS AGREEMENT, REGARDLESS OF THE THEORY OF LIABILITY, WITHOUT ANY CAP OR MAXIMUM AMOUNT.",
-                        confidence=0.99,
-                        reasoning="Defines limitation of liability terms under Section 5."
-                    ),
-                    ClauseItem(
-                        name="Indemnification",
-                        verbatim_text="Client shall indemnify, defend, and hold harmless Vendor, its officers, directors, and employees from and against any and all claims, damages, losses, and expenses, including reasonable attorneys' fees, arising out of or relating to Client's use of the Services, without any exclusion for claims arising from Vendor's own negligence.",
-                        confidence=0.98,
-                        reasoning="Defines the indemnification obligations under Section 6."
-                    ),
-                    ClauseItem(
-                        name="Confidentiality",
-                        verbatim_text="Each party agrees to maintain the confidentiality of the other party's proprietary information disclosed under this Agreement... This obligation shall survive termination of this Agreement for a period of three (3) years.",
-                        confidence=0.97,
-                        reasoning="Defines confidentiality and its survival duration under Section 7."
-                    ),
-                    ClauseItem(
-                        name="Governing Law",
-                        verbatim_text="This Agreement shall be governed by and construed in accordance with the laws of the State of California, without regard to its conflict of laws principles.",
-                        confidence=0.95,
-                        reasoning="Defines governing law jurisdiction under Section 11."
-                    )
-                ]
-            )
-        
-        # Generic fallback
-        return ClauseIntelligenceResult(
-            clauses=[
-                ClauseItem(
-                    name="General Provision",
-                    verbatim_text=text[:150] + "...",
-                    confidence=0.80,
-                    reasoning="Extracted header of document."
-                )
-            ]
-        )
+        clauses = _extract_clauses_heuristic(text)
+        if not clauses:
+            # Ultimate fallback: grab opening text as a single clause
+            clauses = [ClauseItem(
+                name="Document Header / Opening",
+                verbatim_text=text[:400].strip(),
+                confidence=0.60,
+                reasoning="No structured clauses detected. Returned opening text."
+            )]
+        return ClauseIntelligenceResult(clauses=clauses)
 
+    # ------------------------------------------------------------------
     elif "RiskIntelligenceResult" in schema_name:
-        if is_sample:
-            return RiskIntelligenceResult(
-                risk_flags=[
-                    RiskFlagItem(
-                        clause_name="Limitation of Liability",
-                        category="Unlimited Liability",
-                        severity="Critical",
-                        text="IN NO EVENT SHALL VENDOR'S LIABILITY UNDER THIS AGREEMENT BE LIMITED, AND VENDOR SHALL BE FULLY LIABLE FOR ALL DIRECT, INDIRECT, INCIDENTAL, SPECIAL, AND CONSEQUENTIAL DAMAGES ARISING FROM OR RELATED TO THIS AGREEMENT, REGARDLESS OF THE THEORY OF LIABILITY, WITHOUT ANY CAP OR MAXIMUM AMOUNT.",
-                        reasoning="Vendor has unlimited liability with no cap whatsoever, exposing Vendor to extreme financial risk.",
-                        suggested_action="Renegotiate to insert a standard bilateral liability cap, e.g., limited to fees paid in the preceding 12 months.",
-                        confidence=0.98
-                    ),
-                    RiskFlagItem(
-                        clause_name="Termination",
-                        category="One-sided Termination",
-                        severity="High",
-                        text="Vendor may terminate this Agreement at any time, for any reason or no reason, upon fifteen (15) days written notice to Client. Client may terminate this Agreement for material breach only, provided such breach remains uncured for sixty (60) days following written notice.",
-                        reasoning="The termination clause is highly asymmetrical. Vendor can terminate for convenience with 15 days notice, while Client has no convenience termination rights and must wait 60 days to cure material breach.",
-                        suggested_action="Insert a mutual termination for convenience clause with 30 or 60 days notice for both parties.",
-                        confidence=0.95
-                    ),
-                    RiskFlagItem(
-                        clause_name="Penalty for Early Termination",
-                        category="High Penalty",
-                        severity="High",
-                        text="Should Client terminate this Agreement prior to the end of the then-current term for any reason other than Vendor's uncured material breach, Client shall pay an early termination penalty equal to 100% of the fees remaining under the current term...",
-                        reasoning="A 100% penalty on remaining term fees is extremely punitive for the Client, restricting operational flexibility.",
-                        suggested_action="Negotiate to reduce early termination penalty to a fixed 2-3 months of service fees.",
-                        confidence=0.92
-                    ),
-                    RiskFlagItem(
-                        clause_name="Auto Renewal",
-                        category="Short Non-Renewal Notice",
-                        severity="Medium",
-                        text="unless either party provides written notice of non-renewal at least ninety (90) days prior to the end of the then-current term.",
-                        reasoning="90-day non-renewal notice period is relatively long and easy to miss, leading to automatic lock-in.",
-                        suggested_action="Reduce non-renewal notice period to 30 or 60 days.",
-                        confidence=0.90
-                    )
-                ]
-            )
-        return RiskIntelligenceResult(risk_flags=[])
+        # Extract clauses first if not embedded in prompt context
+        risks = _extract_risks_heuristic(text, [])
+        return RiskIntelligenceResult(risk_flags=risks)
 
+    # ------------------------------------------------------------------
     elif "BusinessImpactResult" in schema_name:
-        if is_sample:
-            return BusinessImpactResult(
-                business_impact=[
-                    BusinessImpactItem(
-                        priority="Critical",
-                        exposure="High",
-                        explanation="Unlimited liability puts the company's entire asset pool at risk for any service issue. This is a severe threat to business continuity."
-                    ),
-                    BusinessImpactItem(
-                        priority="High",
-                        exposure="High",
-                        explanation="Vendor's ability to terminate in 15 days for convenience could cause severe operational disruption if cloud infrastructure hosting is suddenly cut off."
-                    ),
-                    BusinessImpactItem(
-                        priority="High",
-                        exposure="Medium",
-                        explanation="100% early termination fee locks the company into the vendor financially, eliminating flexibility to switch providers if performance degrades."
-                    ),
-                    BusinessImpactItem(
-                        priority="Medium",
-                        exposure="Low",
-                        explanation="The 1.5% monthly interest on late payments (18% annually) increases financial risk in case of processing delays."
-                    )
-                ]
-            )
-        return BusinessImpactResult(business_impact=[])
-
-    elif "ComplianceResult" in schema_name:
-        if is_sample:
-            return ComplianceResult(
-                missing_clauses=[
-                    ComplianceItem(
-                        clause_name="Force Majeure",
-                        is_present=False,
-                        status="Non-compliant",
-                        recommendation="Add a standard Force Majeure clause to excuse performance delays caused by natural disasters, strikes, or acts of God."
-                    ),
-                    ComplianceItem(
-                        clause_name="Data Privacy",
-                        is_present=True,
-                        status="Compliant",
-                        recommendation=""
-                    ),
-                    ComplianceItem(
-                        clause_name="IP Ownership",
-                        is_present=True,
-                        status="Compliant",
-                        recommendation=""
-                    ),
-                    ComplianceItem(
-                        clause_name="Confidentiality",
-                        is_present=True,
-                        status="Compliant",
-                        recommendation=""
-                    ),
-                    ComplianceItem(
-                        clause_name="Dispute Resolution",
-                        is_present=False,
-                        status="Non-compliant",
-                        recommendation="Add a dispute resolution hierarchy (negotiation, mediation, followed by arbitration or court) to avoid costly litigation."
-                    )
-                ]
-            )
-        return ComplianceResult(missing_clauses=[])
-
-    elif "NegotiationResult" in schema_name:
-        if is_sample:
-            return NegotiationResult(
-                negotiation_suggestions=[
-                    NegotiationItem(
-                        clause_name="Limitation of Liability",
-                        current_clause="IN NO EVENT SHALL VENDOR'S LIABILITY UNDER THIS AGREEMENT BE LIMITED, AND VENDOR SHALL BE FULLY LIABLE FOR ALL DIRECT, INDIRECT, INCIDENTAL, SPECIAL, AND CONSEQUENTIAL DAMAGES...",
-                        suggested_clause="EXCEPT FOR LIABILITY ARISING FROM A PARTY'S GROSS NEGLIGENCE OR WILLFUL MISCONDUCT, EACH PARTY'S TOTAL LIABILITY UNDER THIS AGREEMENT SHALL BE LIMITED TO THE TOTAL FEES PAID BY CLIENT TO VENDOR IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM.",
-                        reason="Protects the vendor from existential liability claims and aligns with standard software service agreement caps.",
-                        risk_reduction="Critical -> Low"
-                    ),
-                    NegotiationItem(
-                        clause_name="Termination",
-                        current_clause="Vendor may terminate this Agreement at any time, for any reason or no reason, upon fifteen (15) days written notice to Client.",
-                        suggested_clause="Either party may terminate this Agreement for convenience upon sixty (60) days prior written notice to the other party.",
-                        reason="Establishes mutual termination rights and extends notice time to ensure the client has adequate transition runway.",
-                        risk_reduction="High -> Low"
-                    ),
-                    NegotiationItem(
-                        clause_name="Penalty for Early Termination",
-                        current_clause="Client shall pay an early termination penalty equal to 100% of the fees remaining under the current term...",
-                        suggested_clause="Upon early termination for convenience, Client shall pay a termination fee equal to three (3) months of the monthly fee, as Vendor's sole and exclusive remedy.",
-                        reason="Reduces the severe financial penalty and provides a predictable exit fee structure.",
-                        risk_reduction="High -> Medium"
-                    )
-                ]
-            )
-        return NegotiationResult(negotiation_suggestions=[])
-
-    elif "ExecutiveSummaryResult" in schema_name:
-        if is_sample:
-            return ExecutiveSummaryResult(
-                business_overview="This Master Service Agreement governs cloud infrastructure hosting, data storage, and technical support services provided by Brightwave Cloud Services LLC to Northfield Logistics Pvt. Ltd. It is structured as a monthly subscription service with an initial 12-month term.",
-                key_findings=[
-                    "Defines clear cloud hosting and storage services.",
-                    "Standard confidentiality period of 3 years post-termination.",
-                    "Governing law set in California provides legal predictability."
-                ],
-                major_risks=[
-                    "Unlimited liability exposure for the vendor.",
-                    "Asymmetric termination convenience (15 days notice for vendor, breach-only for client).",
-                    "100% early termination fee penalty."
-                ],
-                critical_dates=[
-                    TimelineItem(date="2026-03-01", event="Effective Date / Commencement of Services"),
-                    TimelineItem(date="2026-12-01", event="Notice Deadline for Non-Renewal (90 days prior to initial term end)"),
-                    TimelineItem(date="2027-03-01", event="Initial Term Expiry / Automatic Renewal Date")
-                ],
-                financial_summary="$18,500 USD monthly subscription service fee. Late payments accrue interest at 1.5% per month. Early termination incurs a penalty of 100% of remaining fees.",
-                recommended_actions=[
-                    "Cap liability at 12-months fees.",
-                    "Change vendor termination for convenience from 15 to 60 days.",
-                    "Reduce early termination penalty to 3 months of fees."
-                ]
-            )
-        
-        return ExecutiveSummaryResult(
-            business_overview="A business agreement governing relations between parties.",
-            key_findings=["Confidentiality clause present."],
-            major_risks=[],
-            critical_dates=[],
-            financial_summary="Payment details not fully parsed.",
-            recommended_actions=["Review standard clauses before signing."]
-        )
-
-    elif "DecisionRecommendationResult" in schema_name:
-        if is_sample:
-            return DecisionRecommendationResult(
-                decision="Proceed after Negotiation",
-                reasoning="The agreement is operationally solid but contains several high-risk legal clauses (unlimited liability, 15-day convenience termination by vendor, 100% early termination penalty) that must be renegotiated before signing.",
-                overall_risk_score=78
-            )
-        return DecisionRecommendationResult(
-            decision="Requires Legal Review",
-            reasoning="A general legal review is recommended to ensure all terms align with standard corporate risk appetites.",
-            overall_risk_score=50
-        )
-
-    elif "ChatResponse" in schema_name:
-        # Simple rule-based answering
+        # Build impact based on keywords found in prompt/text — include verbatim snippets
+        impacts = []
         text_lower = text.lower()
-        if "liability" in text_lower or "limit" in text_lower:
+
+        def _get_snippet(keyword: str, window: int = 150) -> str:
+            idx = text_lower.find(keyword)
+            if idx == -1:
+                return ""
+            start = max(0, idx - 30)
+            end = min(len(text), idx + window)
+            return f' Context: "...{text[start:end].strip()}..."'
+
+        if "critical" in text_lower or "unlimited liability" in text_lower:
+            snippet = _get_snippet("unlimited liability") or _get_snippet("critical")
+            impacts.append(BusinessImpactItem(
+                priority="Critical",
+                exposure="High",
+                explanation=f"Uncapped liability exposure puts the organization's entire asset base at risk for any service failure or breach claim.{snippet}"
+            ))
+        if "terminat" in text_lower and ("15 days" in text_lower or "for any reason" in text_lower):
+            snippet = _get_snippet("for any reason") or _get_snippet("15 days")
+            impacts.append(BusinessImpactItem(
+                priority="High",
+                exposure="High",
+                explanation=f"Short or one-sided termination rights could cause sudden service disruption with minimal transition runway.{snippet}"
+            ))
+        if "penalty" in text_lower or "early termination" in text_lower:
+            snippet = _get_snippet("early termination") or _get_snippet("penalty")
+            impacts.append(BusinessImpactItem(
+                priority="High",
+                exposure="Medium",
+                explanation=f"Early termination penalties restrict operational flexibility and increase switching costs significantly.{snippet}"
+            ))
+        if "auto" in text_lower and "renew" in text_lower:
+            snippet = _get_snippet("auto") or _get_snippet("renew")
+            impacts.append(BusinessImpactItem(
+                priority="Medium",
+                exposure="Low",
+                explanation=f"Automatic renewal clauses can lock the organization into an agreement for an additional term if notice deadlines are missed.{snippet}"
+            ))
+        # Check for financial exposure
+        amount = _extract_amount(text)
+        if amount and not impacts:
+            impacts.append(BusinessImpactItem(
+                priority="Medium",
+                exposure="Medium",
+                explanation=f"Financial commitment of {amount} identified. Review payment obligations, late fees, and refund policy carefully before signing."
+            ))
+        if not impacts:
+            impacts.append(BusinessImpactItem(
+                priority="Low",
+                exposure="Low",
+                explanation="No severe risk clauses detected in heuristic scan. A full Gemini-powered analysis is recommended for a complete assessment."
+            ))
+        return BusinessImpactResult(business_impact=impacts)
+
+
+    # ------------------------------------------------------------------
+    elif "ComplianceResult" in schema_name:
+        text_lower = text.lower()
+        clauses_to_check = [
+            ("Force Majeure", ["force majeure", "act of god", "beyond.*reasonable control"]),
+            ("Termination Notice", ["terminat.*notice", "notice.*terminat"]),
+            ("Confidentiality", ["confidential", "non-disclosure"]),
+            ("Data Privacy", ["data privacy", "gdpr", "personal data", "data protection"]),
+            ("Intellectual Property", ["intellectual property", "ip ownership", "work product", "proprietary"]),
+            ("Payment Terms", ["payment", "invoice", "fee schedule", "amount due"]),
+            ("Dispute Resolution", ["dispute resolution", "arbitrat", "mediati", "litigation"]),
+            ("Governing Law", ["governing law", "governed by", "jurisdiction"]),
+        ]
+
+        missing = []
+        for clause_name, keywords in clauses_to_check:
+            found = any(re.search(kw, text_lower) for kw in keywords)
+            missing.append(ComplianceItem(
+                clause_name=clause_name,
+                is_present=found,
+                status="Compliant" if found else "Non-compliant",
+                recommendation="" if found else f"Add a standard {clause_name} clause to ensure full contractual compliance."
+            ))
+        return ComplianceResult(missing_clauses=missing)
+
+    # ------------------------------------------------------------------
+    elif "NegotiationResult" in schema_name:
+        # Extract risks from the prompt text (which contains risk context)
+        suggestions = []
+        text_lower = text.lower()
+
+        if "unlimited liability" in text_lower or "in no event shall" in text_lower:
+            suggestions.append(NegotiationItem(
+                clause_name="Limitation of Liability",
+                current_clause="[Detected: Unlimited or uncapped liability clause]",
+                suggested_clause="EXCEPT FOR LIABILITY ARISING FROM A PARTY'S GROSS NEGLIGENCE OR WILLFUL MISCONDUCT, EACH PARTY'S TOTAL LIABILITY UNDER THIS AGREEMENT SHALL BE LIMITED TO THE TOTAL FEES PAID BY CLIENT TO VENDOR IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM.",
+                reason="Introduces a standard mutual liability cap protecting both parties from existential financial risk.",
+                risk_reduction="Critical → Low"
+            ))
+
+        if "for any reason or no reason" in text_lower or "at any time" in text_lower:
+            suggestions.append(NegotiationItem(
+                clause_name="Termination",
+                current_clause="[Detected: One-sided or short-notice termination right]",
+                suggested_clause="Either party may terminate this Agreement for convenience upon sixty (60) days prior written notice to the other party.",
+                reason="Establishes mutual termination rights and extends notice time to ensure adequate transition runway.",
+                risk_reduction="High → Low"
+            ))
+
+        if "100%" in text_lower and ("remaining" in text_lower or "penalty" in text_lower):
+            suggestions.append(NegotiationItem(
+                clause_name="Early Termination Penalty",
+                current_clause="[Detected: 100% early termination penalty on remaining fees]",
+                suggested_clause="Upon early termination for convenience, the terminating party shall pay a fee equal to three (3) months of the monthly service fee as the sole and exclusive remedy.",
+                reason="Reduces the severe financial penalty and provides a predictable and proportional exit fee structure.",
+                risk_reduction="High → Medium"
+            ))
+
+        return NegotiationResult(negotiation_suggestions=suggestions)
+
+    # ------------------------------------------------------------------
+    elif "ExecutiveSummaryResult" in schema_name:
+        doc_type = _extract_doc_type(text)
+        companies = _extract_companies(text)
+        amount = _extract_amount(text)
+        jurisdiction = _extract_jurisdiction(text)
+        effective = _extract_date(text, ["effective as of", "effective date", "dated"])
+        termination = _extract_date(text, ["terminat", "expir", "end date"])
+
+        parties_str = " and ".join(companies[:2]) if companies else "the contracting parties"
+        amount_str = f" with a financial obligation of {amount}" if amount else ""
+        jurisdiction_str = f" Governed by the laws of {jurisdiction}." if jurisdiction else ""
+
+        overview = (
+            f"This {doc_type} establishes a formal relationship between {parties_str}{amount_str}."
+            f"{jurisdiction_str} The document defines the rights, obligations, and operational terms "
+            f"governing the arrangement between the parties."
+        )
+
+        key_findings = []
+        if jurisdiction:
+            key_findings.append(f"Governing law: {jurisdiction} — provides legal predictability.")
+        if amount:
+            key_findings.append(f"Financial obligation: {amount} — defined payment structure.")
+        if re.search(r"confidential", text, re.IGNORECASE):
+            key_findings.append("Confidentiality obligations are present in the agreement.")
+        if not key_findings:
+            key_findings.append("Document defines standard business terms between the parties.")
+
+        major_risks = []
+        if re.search(r"unlimited liability|in no event shall.*limited", text, re.IGNORECASE):
+            major_risks.append("Potentially uncapped liability exposure detected.")
+        if re.search(r"for any reason or no reason|at any time.*terminat", text, re.IGNORECASE):
+            major_risks.append("One-sided termination rights may create operational disruption risk.")
+        if re.search(r"auto.?renew|automatically renew", text, re.IGNORECASE):
+            major_risks.append("Auto-renewal clause may lead to unintended contract extensions.")
+
+        # Critical dates
+        critical_dates = []
+        if effective:
+            critical_dates.append(TimelineItem(date=effective, event="Effective Date / Commencement"))
+        if termination:
+            critical_dates.append(TimelineItem(date=termination, event="Contract Expiry / Termination Date"))
+
+        financial_summary = f"Financial obligation: {amount}." if amount else "Financial terms present in the document (exact amount parsing requires Gemini analysis)."
+
+        recommended_actions = [
+            "Conduct a full legal review of all liability and termination clauses.",
+            "Verify all party names, dates, and payment amounts against source documents.",
+        ]
+        if major_risks:
+            recommended_actions.insert(0, "Prioritize renegotiation of flagged high-risk clauses before signing.")
+
+        return ExecutiveSummaryResult(
+            business_overview=overview,
+            key_findings=key_findings,
+            major_risks=major_risks,
+            critical_dates=critical_dates,
+            financial_summary=financial_summary,
+            recommended_actions=recommended_actions
+        )
+
+    # ------------------------------------------------------------------
+    elif "DecisionRecommendationResult" in schema_name:
+        text_lower = text.lower()
+
+        critical_count = text_lower.count("critical")
+        high_count = text_lower.count("[high]") + text_lower.count("severity: high")
+        has_unlimited_liability = "unlimited liability" in text_lower or "in no event shall" in text_lower
+        has_one_sided_termination = "for any reason or no reason" in text_lower
+
+        # Calculate a document-aware risk score
+        risk_score = 30  # baseline
+        if has_unlimited_liability:
+            risk_score += 30
+        if has_one_sided_termination:
+            risk_score += 15
+        if "100%" in text and "penalty" in text_lower:
+            risk_score += 15
+        if critical_count > 0:
+            risk_score += min(critical_count * 5, 20)
+        risk_score = min(risk_score, 95)
+
+        if risk_score >= 70:
+            decision = "Proceed after Negotiation"
+            reasoning = f"The document contains high-risk clauses (risk score: {risk_score}/100) that require renegotiation before signing. Key concerns include potential liability exposure and imbalanced termination terms."
+        elif risk_score >= 45:
+            decision = "Requires Legal Review"
+            reasoning = f"The document contains moderate to high risk elements (risk score: {risk_score}/100) that require professional legal evaluation before execution."
+        elif risk_score >= 20:
+            decision = "Proceed after Negotiation"
+            reasoning = f"The document is generally acceptable (risk score: {risk_score}/100) but contains some clauses that should be reviewed and potentially renegotiated."
+        else:
+            decision = "Proceed"
+            reasoning = f"The document appears to contain standard, balanced terms (risk score: {risk_score}/100). Recommend a standard legal sign-off before execution."
+
+        return DecisionRecommendationResult(
+            decision=decision,
+            reasoning=reasoning,
+            overall_risk_score=risk_score
+        )
+
+    # ------------------------------------------------------------------
+    elif "ChatResponse" in schema_name:
+        # Context-aware chat fallback
+        text_lower = text.lower()
+
+        if "liability" in text_lower and "limit" in text_lower:
+            idx = text_lower.find("liability")
+            snippet = text[max(0, idx-20):idx+300].strip()
             return ChatResponse(
-                answer="The document specifies in Section 5 that in no event shall the Vendor's liability under the agreement be limited, meaning the Vendor has unlimited liability for all direct, indirect, incidental, special, and consequential damages.",
-                confidence=0.95,
-                reasoning="Matched liability keyword and retrieved Section 5 verbatim.",
-                evidence=["IN NO EVENT SHALL VENDOR'S LIABILITY UNDER THIS AGREEMENT BE LIMITED"]
+                answer=f"The document contains a liability clause. Based on heuristic analysis: {snippet[:200]}...",
+                confidence=0.60,
+                reasoning="Matched liability keyword in document text — Gemini API unavailable for deep analysis.",
+                evidence=[snippet[:100]]
             )
-        elif "price" in text_lower or "pay" in text_lower or "fee" in text_lower or "cost" in text_lower:
-            return ChatResponse(
-                answer="The payment terms in Section 2 state that the Client shall pay the Vendor a monthly fee of $18,500 USD, payable within 15 days of the invoice date.",
-                confidence=0.98,
-                reasoning="Matched payment keyword and retrieved Section 2 verbatim.",
-                evidence=["Client shall pay Vendor a monthly fee of $18,500 USD, payable within 15 days of invoice date."]
-            )
-        elif "terminate" in text_lower or "termination" in text_lower:
-            return ChatResponse(
-                answer="According to Section 4, the Vendor can terminate for any reason with 15 days notice, while the Client can only terminate for a material breach that remains uncured for 60 days. Section 10 also imposes a 100% penalty on remaining fees for early termination by the Client.",
-                confidence=0.95,
-                reasoning="Retrieved Sections 4 and 10 detailing termination rights and penalties.",
-                evidence=["Vendor may terminate this Agreement at any time, for any reason or no reason", "early termination penalty equal to 100% of the fees remaining"]
-            )
-        elif "governing law" in text_lower or "jurisdiction" in text_lower:
-            return ChatResponse(
-                answer="Section 11 states that the agreement shall be governed by and construed in accordance with the laws of the State of California, without regard to its conflict of laws principles.",
-                confidence=0.97,
-                reasoning="Retrieved Section 11 verbatim.",
-                evidence=["This Agreement shall be governed by and construed in accordance with the laws of the State of California"]
-            )
-        
-        # Generic answer
         return ChatResponse(
-            answer="Based on the analyzed document text, the agreement establishes terms for services and includes clauses for payment, termination, renewal, and governing law. Let me know if you would like me to find details about a specific section.",
-            confidence=0.85,
-            reasoning="Provided standard summary answer for general questions.",
+            answer="I can see this document but full conversational AI analysis requires Gemini API access. Please ensure your API key is valid and has available quota.",
+            confidence=0.40,
+            reasoning="Gemini API unavailable — returning basic heuristic response.",
             evidence=[]
         )
 
-    # General fallback fallback
+    # ------------------------------------------------------------------
+    # Generic unknown schema — return empty schema instance
     return response_schema()

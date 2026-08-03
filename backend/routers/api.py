@@ -2,9 +2,10 @@ import os
 import uuid
 import csv
 import io
+import traceback
 import fitz  # PyMuPDF
 from fastapi import APIRouter, UploadFile, File, Header, HTTPException, Query
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from typing import Optional, Tuple
 from google.genai import types
 
@@ -84,30 +85,49 @@ async def upload_file(
     doc_id = uuid.uuid4().hex
     saved_file_name = f"{doc_id}{ext}"
     saved_file_path = str(UPLOAD_DIR / saved_file_name)
-    
+
     with open(saved_file_path, "wb") as f:
         f.write(contents)
-        
+
+    # ── DEBUG: Upload receipt ─────────────────────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"[UPLOAD] ✅ File received and saved")
+    print(f"[UPLOAD] Original Filename : {filename}")
+    print(f"[UPLOAD] Saved Path        : {saved_file_path}")
+    print(f"[UPLOAD] File Size         : {len(contents):,} bytes ({len(contents)/1024:.1f} KB)")
+    print(f"[UPLOAD] Document ID       : {doc_id}")
+    # ─────────────────────────────────────────────────────────────────────
+
     try:
         # 2. Extract text and render page images
         if ext == ".pdf":
             # Extract text & page count
-            document_text, pages_count = extract_document_text(saved_file_path, ext, x_gemini_key)
+            document_text, pages_count = extract_document_text(saved_file_path, ext, x_gemini_key or "")
             # Render page images to serve to frontend
             render_pdf_pages(saved_file_path, doc_id)
         else:
             # It's an image
-            document_text, pages_count = extract_document_text(saved_file_path, ext, x_gemini_key)
+            document_text, pages_count = extract_document_text(saved_file_path, ext, x_gemini_key or "")
             # Just copy the original upload as page 0 PNG
             img_dest = str(UPLOAD_DIR / f"{doc_id}_page_0.png")
             with open(img_dest, "wb") as f:
                 f.write(contents)
-                
+
+        # ── DEBUG: Extraction result ──────────────────────────────────────
+        print(f"[UPLOAD] Extraction complete")
+        print(f"[UPLOAD] Pages             : {pages_count}")
+        print(f"[UPLOAD] Text Length       : {len(document_text):,} chars")
+        print(f"[UPLOAD] Extraction empty? : {len(document_text.strip()) == 0}")
+        print(f"[UPLOAD] First 500 chars   :")
+        print(document_text[:500])
+        print(f"{'='*60}\n")
+        # ─────────────────────────────────────────────────────────────────
+
         # Save raw document text to a companion txt file for the orchestrator to read
         text_file_path = str(UPLOAD_DIR / f"{doc_id}.txt")
         with open(text_file_path, "w", encoding="utf-8") as f:
             f.write(document_text)
-            
+
         return {
             "document_id": doc_id,
             "filename": filename,
@@ -115,7 +135,17 @@ async def upload_file(
             "status": "uploaded"
         }
         
+    except HTTPException:
+        # Re-raise HTTP exceptions directly — don’t wrap them
+        if os.path.exists(saved_file_path):
+            os.remove(saved_file_path)
+        raise
     except Exception as e:
+        # ── FULL TRACEBACK LOG so Railway logs show the real error ───────
+        tb = traceback.format_exc()
+        print(f"[UPLOAD] ❌ EXCEPTION during file processing:")
+        print(tb)
+        # ─────────────────────────────────────────────────────────
         # Clean up files on error
         if os.path.exists(saved_file_path):
             os.remove(saved_file_path)
@@ -151,15 +181,26 @@ async def analyze_document(
         
     with open(text_path, "r", encoding="utf-8") as f:
         document_text = f.read()
-        
-    # Get page counts
+
+    # Compute page count
     if ext == ".pdf":
         doc = fitz.open(pdf_path)
         pages_count = len(doc)
         doc.close()
     else:
         pages_count = 1
-        
+
+    # ── DEBUG: Analyze endpoint received text ─────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"[ANALYZE] Starting analysis for doc_id: {doc_id}")
+    print(f"[ANALYZE] Filename   : {filename}")
+    print(f"[ANALYZE] PDF Path   : {pdf_path}")
+    print(f"[ANALYZE] Pages      : {pages_count}")
+    print(f"[ANALYZE] Text Length: {len(document_text):,} chars")
+    print(f"[ANALYZE] Text empty?: {len(document_text.strip()) == 0}")
+    print(f"{'='*60}\n")
+    # ─────────────────────────────────────────────────────────────────────
+
     # Stream response
     return StreamingResponse(
         run_orchestrator(
