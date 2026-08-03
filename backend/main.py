@@ -22,9 +22,15 @@ app = FastAPI(
 )
 
 # CORS Policy configuration
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://doc-pilot-pj90an9cl-kjeevankumar944-5680s-projects.vercel.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for dev simplicity
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
