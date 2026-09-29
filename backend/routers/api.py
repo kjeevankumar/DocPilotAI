@@ -10,9 +10,17 @@ from typing import Optional, Tuple
 from google.genai import types
 
 from backend.config import UPLOAD_DIR, MAX_UPLOAD_SIZE, SUPPORTED_FORMATS
-from backend.models.schemas import ChatRequest, ChatResponse, DocumentAnalysisResponse
+from backend.models.schemas import (
+    ChatRequest,
+    ChatResponse,
+    DocumentAnalysisResponse,
+    TeachMemoryRequest,
+    HindsightStatusResponse,
+    MemoryItem
+)
 from backend.services.pdf_service import render_pdf_pages, get_pdf_info, search_text_coordinates
 from backend.services.gemini_service import get_gemini_client, call_chat_agent
+from backend.services.hindsight_service import hindsight_service
 from backend.agents.orchestrator import run_orchestrator
 
 router = APIRouter()
@@ -248,15 +256,22 @@ async def chat_with_document(
     with open(text_path, "r", encoding="utf-8") as f:
         document_text = f.read()
         
-    # Call chat service
+    # Call chat service with recalled Hindsight memory
     try:
+        # Recall memories relevant to the user's question
+        recalled = hindsight_service.recall(req.message, top_k=3)
+        hindsight_str = ""
+        if recalled:
+            hindsight_str = "\n".join([f"- [{m.get('category')}]: {m.get('content')}" for m in recalled])
+
         client = get_gemini_client(x_gemini_key or "")
         response = call_chat_agent(
             client=client,
             document_text=document_text,
             history=req.history,
             message=req.message,
-            context_data_summary=analysis_json
+            context_data_summary=analysis_json,
+            hindsight_memories=hindsight_str
         )
         
         # Enforce coordinate highlight lookups for answer evidence
@@ -367,3 +382,39 @@ async def download_report(
             
     else:
         raise HTTPException(status_code=400, detail="Invalid format. Supported formats: json, csv, pdf")
+
+# ── HINDSIGHT PERSISTENT MEMORY ENDPOINTS ─────────────────────────────────────
+
+@router.get("/memory/status", response_model=HindsightStatusResponse)
+async def get_memory_status():
+    """Returns the connection and storage status of Hindsight Persistent Memory."""
+    return hindsight_service.get_status()
+
+@router.get("/memory/bank")
+async def list_memory_bank(query: Optional[str] = Query(None)):
+    """Lists all memories stored in the Hindsight Memory Bank with optional search filtering."""
+    return hindsight_service.list_memories(search=query)
+
+@router.post("/memory/recall")
+async def recall_memories(query: str = Query(...)):
+    """Recalls precedents and policies for a specific query from Hindsight."""
+    results = hindsight_service.recall(query=query, top_k=5)
+    return {"query": query, "results": results}
+
+@router.post("/memory/retain")
+async def retain_memory_rule(req: TeachMemoryRequest):
+    """Teaches a new precedent, approved exception, or corporate policy to Hindsight."""
+    retained = hindsight_service.retain(
+        content=req.content,
+        category=req.category,
+        tags=req.tags,
+        source_doc=req.source_doc,
+        bank_id=req.bank_id
+    )
+    return {"status": "success", "memory": retained}
+
+@router.post("/memory/reset")
+async def reset_memory_bank():
+    """Resets the memory bank to the official hackathon seed state."""
+    memories = hindsight_service.reset_bank()
+    return {"status": "success", "total_memories": len(memories)}

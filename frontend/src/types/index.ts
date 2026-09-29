@@ -22,6 +22,7 @@ export interface RiskFlagItem {
   suggested_action: string;
   confidence: number;
   coordinates?: Coordinate[];
+  memory_reference?: string;
 }
 
 export interface BusinessImpactItem {
@@ -44,6 +45,7 @@ export interface NegotiationItem {
   reason: string;
   risk_reduction: string;
   coordinates?: Coordinate[];
+  memory_reference?: string;
 }
 
 export interface TimelineItem {
@@ -72,6 +74,28 @@ export interface EntityExtractionResult {
   reasoning: string;
 }
 
+export interface MemoryItem {
+  id: string;
+  bank_id: string;
+  category: string;
+  content: string;
+  tags: string[];
+  source_doc?: string;
+  timestamp: string;
+  confidence: number;
+  cloud_synced?: boolean;
+}
+
+export interface HindsightStatus {
+  connected: boolean;
+  mode: string;
+  bank_id: string;
+  base_url: string;
+  total_memories: number;
+  categories: Record<string, number>;
+  supported_operations: string[];
+}
+
 export interface DocumentAnalysisResponse {
   document_id: string;
   filename: string;
@@ -90,6 +114,8 @@ export interface DocumentAnalysisResponse {
   recommendations: string[];
   pages_count: number;
   processing_time_sec: number;
+  recalled_memories?: MemoryItem[];
+  memory_insights?: string[];
 }
 
 export interface AgentLog {
@@ -103,3 +129,4 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
 }
+

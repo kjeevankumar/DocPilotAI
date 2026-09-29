@@ -9,7 +9,8 @@ from backend.models.schemas import (
     ComplianceItem,
     NegotiationItem,
     ExecutiveSummaryResult,
-    DecisionRecommendationResult
+    DecisionRecommendationResult,
+    MemoryItem
 )
 
 class AgentContext(BaseModel):
@@ -25,3 +26,5 @@ class AgentContext(BaseModel):
     negotiation_suggestions: Optional[List[NegotiationItem]] = None
     summary: Optional[ExecutiveSummaryResult] = None
     decision: Optional[DecisionRecommendationResult] = None
+    recalled_memories: Optional[List[MemoryItem]] = None
+    memory_insights: Optional[List[str]] = None

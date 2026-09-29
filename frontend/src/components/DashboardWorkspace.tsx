@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { FileText, Award, Clock, Download, ChevronRight, FileCode, LogOut, Check, ShieldCheck, Zap } from 'lucide-react';
+import { FileText, Award, Clock, Download, ChevronRight, FileCode, LogOut, Check, ShieldCheck, Zap, Brain } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 import { DocumentAnalysisResponse, Coordinate } from '../types';
@@ -11,8 +11,7 @@ import RiskRegister from './RiskRegister';
 import ClauseAnalysis from './ClauseAnalysis';
 import EntityGrid from './EntityGrid';
 import AiChat from './AiChat';
-
-
+import HindsightMemoryInspector from './HindsightMemoryInspector';
 
 interface DashboardWorkspaceProps {
   data: DocumentAnalysisResponse;
@@ -21,7 +20,7 @@ interface DashboardWorkspaceProps {
 }
 
 export default function DashboardWorkspace({ data, onReset, apiKey }: DashboardWorkspaceProps) {
-  const [activeTab, setActiveTab] = useState<'summary' | 'risks' | 'clauses' | 'entities' | 'compliance' | 'chat'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | 'memory' | 'risks' | 'clauses' | 'entities' | 'compliance' | 'chat'>('summary');
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
 
@@ -294,6 +293,7 @@ export default function DashboardWorkspace({ data, onReset, apiKey }: DashboardW
           <div className="flex border-b border-slate-800 bg-slate-950/40 select-none overflow-x-auto">
             {([
               { id: 'summary', label: 'Executive Summary' },
+              { id: 'memory', label: '🧠 Hindsight Memory Engine' },
               { id: 'risks', label: 'Risk Register' },
               { id: 'clauses', label: 'Clause Inspector' },
               { id: 'entities', label: 'Extracted Entities' },
@@ -321,6 +321,31 @@ export default function DashboardWorkspace({ data, onReset, apiKey }: DashboardW
           <div className="flex-1 p-6 overflow-y-auto bg-slate-950/15">
             {activeTab === 'summary' && (
               <div className="space-y-6 text-xs text-slate-300">
+                {/* Hindsight Memory Recalled Callout Banner */}
+                {data.recalled_memories && data.recalled_memories.length > 0 && (
+                  <div className="flex items-center justify-between p-3.5 rounded-xl border border-indigo-500/30 bg-indigo-950/30 text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                        <Brain className="w-4 h-4 text-indigo-400" />
+                      </div>
+                      <div>
+                        <span className="font-bold text-indigo-300">
+                          Hindsight Memory Active:
+                        </span>{' '}
+                        <span className="text-slate-300">
+                          Recalled {data.recalled_memories.length} historical corporate precedents for {data.filename}.
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('memory')}
+                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold rounded-md transition cursor-pointer shadow-md shadow-indigo-600/20 shrink-0"
+                    >
+                      View Memory Engine →
+                    </button>
+                  </div>
+                )}
+
                 {/* Business Overview */}
                 <div>
                   <span className="font-bold text-slate-400 uppercase tracking-widest text-[10px] block mb-2">
@@ -457,6 +482,13 @@ export default function DashboardWorkspace({ data, onReset, apiKey }: DashboardW
                   </div>
                 )}
               </div>
+            )}
+
+            {activeTab === 'memory' && (
+              <HindsightMemoryInspector
+                data={data}
+                apiKey={apiKey}
+              />
             )}
 
             {activeTab === 'chat' && (

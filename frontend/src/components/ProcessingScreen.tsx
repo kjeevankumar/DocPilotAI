@@ -23,6 +23,7 @@ const AGENTS_LIST = [
   'Negotiation Agent',
   'Executive Summary Agent',
   'Decision Recommendation Agent',
+  'Hindsight Memory Agent',
   'Highlight Coordinate Mapping'
 ];
 

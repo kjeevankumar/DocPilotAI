@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Search, AlertTriangle, AlertCircle, AlertOctagon, HelpCircle, ShieldCheck, ChevronDown, ChevronUp, MapPin } from 'lucide-react';
+import { Search, AlertTriangle, AlertCircle, AlertOctagon, HelpCircle, ShieldCheck, ChevronDown, ChevronUp, MapPin, Brain } from 'lucide-react';
 import { RiskFlagItem, Coordinate } from '../types';
 
 interface RiskRegisterProps {
@@ -142,6 +142,12 @@ export default function RiskRegister({ risks, onLocate, activeRiskId }: RiskRegi
                       <div className="text-[10px] text-slate-400 mt-0.5 truncate">
                         Clause: {risk.clause_name}
                       </div>
+                      {risk.memory_reference && (
+                        <div className="inline-flex items-center gap-1 text-[9px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20 mt-1">
+                          <Brain className="w-2.5 h-2.5" />
+                          Hindsight Precedent
+                        </div>
+                      )}
                     </div>
                   </div>
                   
@@ -172,6 +178,13 @@ export default function RiskRegister({ risks, onLocate, activeRiskId }: RiskRegi
                       <span className="font-semibold text-slate-400 block mb-1">Suggested Mitigation:</span>
                       <p className="leading-relaxed font-sans text-indigo-300">{risk.suggested_action}</p>
                     </div>
+
+                    {risk.memory_reference && (
+                      <div className="p-2.5 rounded-lg bg-indigo-950/30 border border-indigo-700/40 text-[10px] text-indigo-300 flex items-center gap-2 font-mono">
+                        <Brain className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                        <span>{risk.memory_reference}</span>
+                      </div>
+                    )}
 
                     {/* Meta and Locater */}
                     <div className="flex items-center justify-between pt-2 border-t border-slate-900">

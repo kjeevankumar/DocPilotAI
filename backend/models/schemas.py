@@ -53,6 +53,7 @@ class RiskFlagItem(BaseModel):
     suggested_action: str = Field(..., description="Actionable recommendation to address the risk")
     confidence: float = Field(..., description="Risk identification confidence (0.0 to 1.0)")
     coordinates: Optional[List[Coordinate]] = Field(None, description="Highlight bounding boxes mapped by PDF processing service")
+    memory_reference: Optional[str] = Field(None, description="Hindsight memory precedent reference that influenced this finding")
 
 class RiskIntelligenceResult(BaseModel):
     risk_flags: List[RiskFlagItem] = Field(..., description="List of detected risk items")
@@ -81,6 +82,7 @@ class NegotiationItem(BaseModel):
     reason: str = Field(..., description="Rationale for the suggested wording change")
     risk_reduction: str = Field(..., description="Expected change in risk level (e.g., Critical -> Low)")
     coordinates: Optional[List[Coordinate]] = Field(None, description="Highlight bounding boxes mapped by PDF processing service")
+    memory_reference: Optional[str] = Field(None, description="Hindsight memory precedent reference that inspired this redline")
 
 class NegotiationResult(BaseModel):
     negotiation_suggestions: List[NegotiationItem] = Field(..., description="List of proposed clause redlines")
@@ -120,6 +122,40 @@ class ChatResponse(BaseModel):
     evidence: List[str] = Field(default_factory=list, description="Specific snippets supporting the answer")
     coordinates: Optional[List[Coordinate]] = Field(None, description="Highlight bounding boxes for references")
 
+# --- Hindsight Memory Schemas ---
+
+class MemoryItem(BaseModel):
+    id: str
+    bank_id: str = "docpilot-legal-bank"
+    category: str = "Precedent"
+    content: str
+    tags: List[str] = Field(default_factory=list)
+    source_doc: Optional[str] = None
+    timestamp: str
+    confidence: float = 0.95
+    cloud_synced: Optional[bool] = False
+
+class MemoryRecallResult(BaseModel):
+    query: str
+    memories: List[MemoryItem] = Field(default_factory=list)
+    reasoning: Optional[str] = None
+
+class TeachMemoryRequest(BaseModel):
+    content: str
+    category: str = "Learned Precedent"
+    tags: List[str] = Field(default_factory=list)
+    source_doc: Optional[str] = None
+    bank_id: Optional[str] = None
+
+class HindsightStatusResponse(BaseModel):
+    connected: bool
+    mode: str
+    bank_id: str
+    base_url: str
+    total_memories: int
+    categories: Dict[str, int]
+    supported_operations: List[str]
+
 # --- Consolidated Output payload for UI ---
 
 class DocumentAnalysisResponse(BaseModel):
@@ -140,3 +176,5 @@ class DocumentAnalysisResponse(BaseModel):
     recommendations: List[str]
     pages_count: int
     processing_time_sec: float
+    recalled_memories: List[MemoryItem] = Field(default_factory=list, description="Institutional memories recalled from Hindsight for this contract")
+    memory_insights: List[str] = Field(default_factory=list, description="Cross-contract precedent insights applied during analysis")

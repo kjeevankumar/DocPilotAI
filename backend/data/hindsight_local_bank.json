@@ -1,0 +1,92 @@
+[
+  {
+    "id": "mem_f2c568b6",
+    "bank_id": "docpilot-legal-bank",
+    "category": "Approved Exception",
+    "content": "Approved 45-day SLA review period for Acme Corp.",
+    "tags": [
+      "Acme Corp",
+      "SLA"
+    ],
+    "source_doc": "Acme_SOW_2025.pdf",
+    "timestamp": "2026-09-29T14:36:57.305460+00:00",
+    "confidence": 0.95,
+    "cloud_synced": false
+  },
+  {
+    "id": "mem_seed_001",
+    "bank_id": "docpilot-legal-bank",
+    "category": "Approved Exception",
+    "content": "In prior Master Services Agreement review with Acme Corp, Executive Legal approved a 1x annual contract value liability cap exception (up to $500,000 maximum), superseding our default 2x cap requirement due to Acme Corp providing an active $5M commercial cyber/E&O certificate.",
+    "tags": [
+      "Acme Corp",
+      "liability",
+      "precedent",
+      "approved_exception"
+    ],
+    "source_doc": "MSA_AcmeCorp_2024_Executed.pdf",
+    "timestamp": "2024-10-14T11:20:00Z",
+    "confidence": 0.98
+  },
+  {
+    "id": "mem_seed_002",
+    "bank_id": "docpilot-legal-bank",
+    "category": "Corporate Policy",
+    "content": "Global Corporate Procurement Policy Section 4.2 mandates Net-30 or Net-45 payment terms. Net-60 or longer terms are strictly prohibited without CFO written authorization and must include a 2% 10-day early settlement discount option.",
+    "tags": [
+      "payment_terms",
+      "finance",
+      "policy",
+      "procurement"
+    ],
+    "source_doc": "Global_Procurement_Playbook_v3.pdf",
+    "timestamp": "2024-11-01T09:00:00Z",
+    "confidence": 0.95
+  },
+  {
+    "id": "mem_seed_003",
+    "bank_id": "docpilot-legal-bank",
+    "category": "Compliance Precedent",
+    "content": "All vendor software licenses and cloud agreements must mandate mutual indemnification for third-party intellectual property infringement. Unilateral customer-only indemnification must be redlined to mutual standard protection.",
+    "tags": [
+      "indemnification",
+      "intellectual_property",
+      "compliance",
+      "policy"
+    ],
+    "source_doc": "Legal_Redline_Standard_Guidance.pdf",
+    "timestamp": "2024-12-05T14:30:00Z",
+    "confidence": 0.96
+  },
+  {
+    "id": "mem_seed_004",
+    "bank_id": "docpilot-legal-bank",
+    "category": "Regulatory Rule",
+    "content": "Under corporate GDPR and SOC2 compliance commitments, all security incidents and personal data breach notifications must be communicated to our Security Office within 48 hours. Any vendor draft specifying 72 hours or 'commercially reasonable effort' must be amended to 48 hours maximum.",
+    "tags": [
+      "data_privacy",
+      "security",
+      "GDPR",
+      "SOC2",
+      "compliance"
+    ],
+    "source_doc": "InfoSec_Vendor_Security_Requirements.pdf",
+    "timestamp": "2025-01-10T16:45:00Z",
+    "confidence": 0.99
+  },
+  {
+    "id": "mem_seed_005",
+    "bank_id": "docpilot-legal-bank",
+    "category": "Negotiation Precedent",
+    "content": "For multi-year vendor engagements, our negotiated baseline with CloudTech Solutions established a 30-day written notice termination for convenience with pro-rated refund of prepaid fees.",
+    "tags": [
+      "termination",
+      "convenience",
+      "vendor_history",
+      "negotiation"
+    ],
+    "source_doc": "CloudTech_Amendment_2.pdf",
+    "timestamp": "2025-01-28T10:15:00Z",
+    "confidence": 0.92
+  }
+]

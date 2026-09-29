@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Shield, Cpu, Key, Eye, EyeOff } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Shield, Cpu, Key, Eye, EyeOff, Brain } from 'lucide-react';
 import UploadZone from '../components/UploadZone';
 import ProcessingScreen from '../components/ProcessingScreen';
 import DashboardWorkspace from '../components/DashboardWorkspace';
@@ -9,14 +9,18 @@ import { DocumentAnalysisResponse } from '../types';
 
 export default function Home() {
   const [appState, setAppState] = useState<'landing' | 'processing' | 'dashboard'>('landing');
-  const [apiKey, setApiKey] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('gemini_api_key') || '';
-    }
-    return '';
-  });
+  const [apiKey, setApiKey] = useState('');
+  const [mounted, setMounted] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showKey, setShowKey] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    const stored = localStorage.getItem('gemini_api_key');
+    if (stored) {
+      setApiKey(stored);
+    }
+  }, []);
   
   // File details
   const [docId, setDocId] = useState('');
@@ -69,6 +73,11 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-4">
+          <div className="hidden sm:flex items-center gap-1.5 text-xs text-indigo-400 font-mono bg-indigo-950/40 px-2.5 py-1 rounded-lg border border-indigo-500/30">
+            <Brain className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+            <span>Hindsight Memory Active</span>
+          </div>
+
           <div className="flex items-center gap-1.5 text-xs text-slate-500 font-mono">
             <Shield className="w-3.5 h-3.5 text-indigo-400/80" />
             <span>Autonomous Sandbox</span>
@@ -80,7 +89,7 @@ export default function Home() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs font-semibold cursor-pointer transition-colors"
             >
               <Key className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{apiKey ? 'API Key Configured' : 'Configure API Key'}</span>
+              <span>{mounted && apiKey ? 'API Key Configured' : 'Configure API Key'}</span>
             </button>
             
             {showSettings && (
@@ -108,7 +117,7 @@ export default function Home() {
                 </div>
                 <div className="mt-3 flex justify-between items-center">
                   <span className="text-[9px] text-slate-500">
-                    {apiKey ? '✓ Key stored locally' : '⚠️ Using backend .env key'}
+                    {mounted && apiKey ? '✓ Key stored locally' : '⚠️ Using backend .env key'}
                   </span>
                   <button
                     onClick={() => setShowSettings(false)}

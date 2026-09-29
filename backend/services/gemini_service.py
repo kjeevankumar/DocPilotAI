@@ -184,20 +184,23 @@ def call_chat_agent(
     document_text: str,
     history: List[ChatMessage],
     message: str,
-    context_data_summary: str
+    context_data_summary: str,
+    hindsight_memories: str = ""
 ) -> ChatResponse:
     """
     Specialized agent for answering questions about the analyzed document.
-    Incorporates the document text, history, and the computed analysis context.
+    Incorporates the document text, history, computed analysis context, and Hindsight persistent memories.
     """
     system_instruction = (
         "You are the DocPilot Conversational Chat Agent. Your role is to answer questions about the "
-        "provided document context and the associated structured analysis findings.\n\n"
+        "provided document context, the associated structured analysis findings, and your persistent Hindsight Memory.\n\n"
         "RULES:\n"
-        "1. Answer queries truthfully based ONLY on the document and summary context.\n"
-        "2. Do NOT hallucinate. If details are not present, explicitly state they are not in the document.\n"
-        "3. Provide confidence score (0.0 to 1.0), internal reasoning, and verbatim evidence snippets.\n"
-        "4. Keep answers clear, structured, and easy for business professionals to digest."
+        "1. Answer queries truthfully based on the document, analysis findings, and recalled Hindsight memories.\n"
+        "2. When the user asks about past negotiations, vendor history, precedent exceptions, or corporate policies, "
+        "cite Hindsight Institutional Memory explicitly (e.g. 'According to institutional memory...').\n"
+        "3. Do NOT hallucinate facts not present in either the document or memory.\n"
+        "4. Provide confidence score (0.0 to 1.0), internal reasoning, and verbatim evidence snippets.\n"
+        "5. Keep answers clear, structured, and easy for business professionals to digest."
     )
 
     # Reconstruct chat log
@@ -205,9 +208,14 @@ def call_chat_agent(
     for msg in history:
         chat_history_prompt += f"{msg.role.upper()}: {msg.content}\n"
 
+    memory_section = ""
+    if hindsight_memories:
+        memory_section = f"--- HINDSIGHT INSTITUTIONAL MEMORY (Past Precedents & Policies) ---\n{hindsight_memories}\n\n"
+
     prompt = (
         f"--- DOCUMENT TEXT ---\n{document_text}\n\n"
         f"--- AGENT ANALYSIS SUMMARY ---\n{context_data_summary}\n\n"
+        f"{memory_section}"
         f"--- CONVERSATION HISTORY ---\n{chat_history_prompt}\n"
         f"USER: {message}\n"
         f"Respond using the ChatResponse schema."
