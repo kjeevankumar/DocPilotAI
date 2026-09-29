@@ -225,8 +225,10 @@ We've included a ready-to-test agreement: `DocPilot_Test_Agreement.pdf`.
 
 ## 📄 Documentation & Links
 
+- 📚 **Comprehensive 14-Page Technical Whitepaper (PDF):** [DOCPILOT_AI_WHITEPAPER.pdf](DOCPILOT_AI_WHITEPAPER.pdf)
+- 📝 **Whitepaper Full Text (Markdown):** [DOCPILOT_AI_WHITEPAPER.md](DOCPILOT_AI_WHITEPAPER.md)
 - 📖 **Architecture Guide & Demo Script:** [HINDSIGHT_INTEGRATION.md](HINDSIGHT_INTEGRATION.md)
-- 📑 **Publication-Grade PDF Report:** [HINDSIGHT_INTEGRATION.pdf](HINDSIGHT_INTEGRATION.pdf)
+- 📑 **Submission Summary PDF:** [HINDSIGHT_INTEGRATION.pdf](HINDSIGHT_INTEGRATION.pdf)
 - 🌐 **Vectorize Hindsight:** [vectorize.io](https://vectorize.io)
 
 ---
