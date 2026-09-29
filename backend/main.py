@@ -55,6 +55,8 @@ print(f"{'#'*70}\n")
 # Solution: use `allow_origin_regex` to match ALL *.vercel.app subdomains plus
 # localhost variants used in development.
 origins = [
+    # Production Vercel App
+    "https://doc-pilot-ai-sepia.vercel.app",
     # Local development
     "http://localhost:3000",
     "http://localhost:3001",
@@ -75,6 +77,17 @@ app.add_middleware(
     expose_headers=["*"],
 )
 # ─────────────────────────────────────────────────────────────────────────────
+
+from fastapi.responses import JSONResponse
+import traceback
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "error": str(exc)},
+    )
 
 # Include Router
 app.include_router(api.router, prefix="/api")
