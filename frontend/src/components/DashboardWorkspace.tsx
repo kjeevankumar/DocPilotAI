@@ -5,6 +5,7 @@ import { FileText, Award, Clock, Download, ChevronRight, FileCode, LogOut, Check
 import confetti from 'canvas-confetti';
 
 import { DocumentAnalysisResponse, Coordinate } from '../types';
+import { getBackendUrl } from '../lib/api';
 import PdfViewer from './PdfViewer';
 import RiskScoreGauge from './RiskScoreGauge';
 import RiskRegister from './RiskRegister';
@@ -24,7 +25,7 @@ export default function DashboardWorkspace({ data, onReset, apiKey }: DashboardW
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
 
-  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const BACKEND_URL = getBackendUrl();
 
   // Helper to download report files (now inside component scope)
   async function downloadReport(format: 'pdf' | 'csv' | 'json') {

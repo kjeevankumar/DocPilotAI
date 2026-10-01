@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Terminal, CheckCircle2, Circle, Loader2, AlertCircle } from 'lucide-react';
 import { AgentLog, DocumentAnalysisResponse } from '../types';
+import { getBackendUrl } from '../lib/api';
 
 interface ProcessingScreenProps {
   docId: string;
@@ -35,7 +36,7 @@ export default function ProcessingScreen({ docId, filename, apiKey, onComplete, 
   const [errorMessage, setErrorMessage] = useState('');
   const terminalEndRef = useRef<HTMLDivElement>(null);
   
-  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const BACKEND_URL = getBackendUrl();
 
   useEffect(() => {
     // Scroll terminal to bottom when logs are added

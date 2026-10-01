@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2, Sparkles, MapPin } from 'lucide-react';
 import { ChatMessage, Coordinate } from '../types';
+import { getBackendUrl } from '../lib/api';
 
 interface AiChatProps {
   documentId: string;
@@ -29,7 +30,7 @@ export default function AiChat({ documentId, apiKey, onLocate }: AiChatProps) {
   const [responseDetails, setResponseDetails] = useState<Record<number, { evidence?: string[]; coordinates?: Coordinate[] }>>({});
 
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const BACKEND_URL = getBackendUrl();
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });

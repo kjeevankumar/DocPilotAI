@@ -2,6 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { Upload, FileText, AlertCircle, Cpu, Zap, BarChart3, FileSearch } from 'lucide-react';
+import { getBackendUrl } from '../lib/api';
 
 interface UploadZoneProps {
   apiKey: string;
@@ -15,7 +16,7 @@ export default function UploadZone({ apiKey, onUploadSuccess }: UploadZoneProps)
   const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const BACKEND_URL = getBackendUrl();
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { getBackendUrl } from '../lib/api';
 import { 
   Brain, 
   Sparkles, 
@@ -38,7 +39,7 @@ export default function HindsightMemoryInspector({ data, apiKey }: HindsightMemo
   const [teachSourceDoc, setTeachSourceDoc] = useState(data.filename || '');
   const [teachSuccess, setTeachSuccess] = useState(false);
 
-  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const BACKEND_URL = getBackendUrl();
 
   // Fetch Hindsight status & memories
   const fetchMemoryData = async () => {

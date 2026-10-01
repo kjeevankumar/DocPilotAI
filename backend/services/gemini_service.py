@@ -1,27 +1,32 @@
 import os
 import time
 import re
-from typing import Any, List
+from typing import Any, List, Optional
 from google import genai
 from google.genai import types
 from backend.config import GEMINI_API_KEY
 from backend.models.schemas import ChatResponse, ChatMessage
 
-def get_gemini_client(api_key: str = "") -> genai.Client:
+def get_gemini_client(api_key: str = "") -> Optional[genai.Client]:
     """
     Retrieves the GenAI Client using either a dynamic API key provided in the
     headers or the local environment variable.
+    Returns None if no key is provided, allowing graceful fallback to heuristics.
     """
     key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
     if not key:
-        raise ValueError("Gemini API Key is missing. Please provide it in the settings panel.")
+        print("[GEMINI_CLIENT] ℹ️ No Gemini API Key provided — fallback smart heuristics will be used.")
+        return None
     # Format sanity check — Gemini keys always start with 'AIzaSy'
     if not key.startswith("AIzaSy"):
         print(f"[GEMINI_CLIENT] ⚠️  WARNING: API key does not start with 'AIzaSy'. "
               f"This key (starts with '{key[:8]}...') is likely invalid for Gemini. "
               f"Get a valid key at https://aistudio.google.com/app/apikey")
-    return genai.Client(api_key=key)
-
+    try:
+        return genai.Client(api_key=key)
+    except Exception as e:
+        print(f"[GEMINI_CLIENT] ❌ Failed to initialize Gemini client: {e}")
+        return None
 
 
 def _extract_doc_text_from_prompt(prompt: str) -> str:
@@ -59,7 +64,7 @@ def _extract_doc_text_from_prompt(prompt: str) -> str:
 
 
 def call_structured_gemini(
-    client: genai.Client,
+    client: Optional[genai.Client],
     prompt: str,
     response_schema: Any,
     system_instruction: str = "",
@@ -69,18 +74,18 @@ def call_structured_gemini(
     Executes a content generation request expecting a structured response.
     Validates and returns the parsed Pydantic schema model.
     Includes robust retries with exponential backoff for 429 Rate Limits.
-    Falls back to a smart heuristic generation if the key is exhausted/rate-limited.
-
-    NOTE: API_FAILED and IS_SAMPLE_RUN are intentionally LOCAL variables per call,
-    not module-level globals. Using module globals caused every document after
-    the first API failure to return identical static fallback data forever — 
-    even after a valid API key was provided or the rate limit window expired.
+    Falls back to a smart heuristic generation if the key is exhausted/rate-limited or absent.
     """
     from backend.services.fallback_service import generate_smart_fallback
 
     schema_name = getattr(response_schema, "__name__", str(response_schema))
     prompt_length = len(prompt)
     doc_text_present = "DOCUMENT TEXT" in prompt or "document_text" in prompt.lower()
+
+    if client is None:
+        print(f"[GEMINI] ℹ️  No active client available — activating smart heuristic fallback for schema: {schema_name}")
+        doc_text = _extract_doc_text_from_prompt(prompt)
+        return generate_smart_fallback(response_schema, doc_text)
 
     print(f"\n{'='*60}")
     print(f"[GEMINI] Calling Gemini API")

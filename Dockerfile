@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the full project
 COPY . .
 
+ENV PYTHONPATH=/app
+
 # Expose port (Railway sets $PORT at runtime)
 EXPOSE 8000
 

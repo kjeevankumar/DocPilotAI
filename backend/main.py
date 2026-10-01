@@ -50,27 +50,10 @@ print(f"{'#'*70}\n")
 
 
 # ── CORS Policy ─────────────────────────────────────────────────────────────
-# IMPORTANT: `allow_origins` uses EXACT matching. A hardcoded Vercel preview
-# URL breaks on every new deployment because Vercel generates a new subdomain.
-# Solution: use `allow_origin_regex` to match ALL *.vercel.app subdomains plus
-# localhost variants used in development.
-origins = [
-    # Production Vercel App
-    "https://doc-pilot-ai-sepia.vercel.app",
-    # Local development
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
-
+# Match all origins (Vercel production, preview URLs, local dev) with credential support
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    # Regex covers ALL Vercel deployments: production alias + every preview URL
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost:.*|http://127\.0\.0\.1:.*|https://.*",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
@@ -84,17 +67,26 @@ import traceback
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     traceback.print_exc()
+    origin = request.headers.get("origin", "*")
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal Server Error", "error": str(exc)},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "*",
+        }
     )
 
 # Include Router
 app.include_router(api.router, prefix="/api")
 
 @app.get("/")
+@app.get("/health")
+@app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint for Railway and deployment monitoring."""
     return {
         "status": "healthy",
         "service": "DocPilot AI Backend",

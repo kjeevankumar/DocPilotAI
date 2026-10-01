@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { Coordinate } from '../types';
+import { getBackendUrl } from '../lib/api';
 
 interface HighlightItem {
   id: string;
@@ -31,7 +32,7 @@ export default function PdfViewer({
   setCurrentPage
 }: PdfViewerProps) {
   const [zoom, setZoom] = useState(100); // Zoom in percentage (e.g., 100, 120, 150)
-  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const BACKEND_URL = getBackendUrl();
 
   const handlePrevPage = () => {
     if (currentPage > 0) {
